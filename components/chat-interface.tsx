@@ -19,7 +19,7 @@ interface Message {
 interface ChatInterfaceProps {
   userId: string
   tokens: number
-  isAdmin?: boolean // Added isAdmin prop
+  isAdmin?: boolean
 }
 
 const BAUKI_POSES = {
@@ -129,7 +129,7 @@ export function ChatInterface({ userId, tokens, isAdmin = false }: ChatInterface
       // Refresh to update token count
       router.refresh()
     } catch (error) {
-      console.error("[v0] Error sending message:", error)
+      console.error("[Chat] Error sending message:", error)
       const errorMessage: Message = {
         role: "assistant",
         content: "Entschuldigung, es gab einen Fehler. Bitte versuche es erneut.",

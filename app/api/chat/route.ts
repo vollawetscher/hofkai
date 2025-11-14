@@ -2,7 +2,6 @@ import { type NextRequest, NextResponse } from "next/server"
 import { createClient } from "@/lib/supabase/server"
 import { streamText, generateText } from "ai"
 import { createGroq } from "@ai-sdk/groq"
-import { isEloEnabled, searchEloDocuments } from "@/lib/elo-search"
 
 const groq = createGroq({
   apiKey: process.env.GROQ_API_KEY,
@@ -40,7 +39,7 @@ STATUS: [KLAR oder UNKLAR]
     maxTokens: 800,
   })
 
-  console.log("[v0] Analysis result:", text)
+  console.log("[Chat] Analysis result:", text)
 
   if (text.includes("STATUS: UNKLAR")) {
     const questionsMatch = text.match(/RÜCKFRAGEN:([\s\S]+)/)
@@ -61,7 +60,7 @@ async function verifyAndImproveAnswer(
   originalQuestion: string,
   generatedAnswer: string
 ): Promise<string> {
-  console.log("[v0] Starting quality control check...")
+  console.log("[Chat] Starting quality control check...")
 
   const qualityCheckPrompt = `Du bist der Qualitätskontrolleur für Bauki-Antworten. Prüfe die folgende Antwort KRITISCH:
 
@@ -117,39 +116,28 @@ Deine Bewertung:`
     maxTokens: 1500,
   })
 
-  console.log("[v0] Quality check result:", qualityCheck)
+  console.log("[Chat] Quality check result:", qualityCheck)
 
   if (qualityCheck.includes("[PERFEKT]")) {
-    console.log("[v0] Answer approved - reliable sources, no speculation")
+    console.log("[Chat] Answer approved - reliable sources, no speculation")
     return generatedAnswer
   } else if (qualityCheck.includes("[ZURÜCKWEISEN]")) {
-    console.log("[v0] Answer REJECTED - unreliable information detected, generating new version")
+    console.log("[Chat] Answer REJECTED - unreliable information detected, generating new version")
     const improvedMatch = qualityCheck.match(/\[ZURÜCKWEISEN\]([\s\S]+)/)
     const improvedAnswer = improvedMatch ? improvedMatch[1].trim() : generatedAnswer
-    console.log("[v0] New reliable answer generated")
+    console.log("[Chat] New reliable answer generated")
     return improvedAnswer
   } else {
-    console.log("[v0] Answer needs improvement - refining with verified sources")
+    console.log("[Chat] Answer needs improvement - refining with verified sources")
     const improvedMatch = qualityCheck.match(/\[VERBESSERN\]([\s\S]+)/)
     const improvedAnswer = improvedMatch ? improvedMatch[1].trim() : generatedAnswer
-    console.log("[v0] Improved answer with verified sources generated")
+    console.log("[Chat] Improved answer with verified sources generated")
     return improvedAnswer
   }
 }
 
-function createBaukiSystemPrompt(optimizedPrompt: string, eloContext?: string[]): string {
-  const eloSection = eloContext && eloContext.length > 0
-    ? `
-📚 VERFÜGBARE ELO-DOKUMENTE (als verlässliche Quellen nutzen):
-${eloContext.join("\n\n")}
-
-WICHTIG: Diese Dokumente sind geprüfte Quellen aus der Baudatenbank. Nutze sie bevorzugt für deine Antworten und zitiere sie (z.B. "Laut unserem Dokument zu...")
-`
-    : ""
-
+function createBaukiSystemPrompt(optimizedPrompt: string): string {
   return `Rolle: Du bist „Bauki", der kompetente und ehrliche Wohn-Berater von baukeinscheiss.de. Du hilfst privaten Bauherren, Sanierern, Immobilienkäufern und Mietern mit verständlichen, präzisen Antworten – ohne Fachchinesisch und ohne Ausflüchte.
-
-${eloSection}
 
 🎯 Ziel
 Hilf Nutzern, fundierte Entscheidungen zu treffen und ihre Projekte sicher anzugehen. Dein Motto: „Klare Antworten, keine Ausreden."
@@ -216,16 +204,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Keine Bauklötze mehr verfügbar" }, { status: 403 })
     }
 
-    const eloActive = await isEloEnabled()
-    let eloContext: string[] | undefined = undefined
-
-    if (eloActive) {
-      console.log("[v0] ELO is ACTIVE - searching documents...")
-      eloContext = await searchEloDocuments(question)
-      console.log(`[v0] Found ${eloContext.length} relevant documents`)
-    } else {
-      console.log("[v0] ELO is INACTIVE - using only AI knowledge")
-    }
+    console.log("[Chat] Processing question without ELO integration")
 
     const analysis = await analyzeAndOptimizeQuestion(question)
 
@@ -244,7 +223,7 @@ Formuliere sie als Bauki im passenden Ton (freundlich, seriös, hilfreich).`,
       return result.toTextStreamResponse()
     }
 
-    const systemPrompt = createBaukiSystemPrompt(analysis.optimizedPrompt || question, eloContext)
+    const systemPrompt = createBaukiSystemPrompt(analysis.optimizedPrompt || question)
 
     const { text: generatedAnswer } = await generateText({
       model: groq("llama-3.3-70b-versatile"),
@@ -253,14 +232,13 @@ Formuliere sie als Bauki im passenden Ton (freundlich, seriös, hilfreich).`,
       maxTokens: 500,
     })
 
-    console.log("[v0] Generated answer:", generatedAnswer)
-    console.log(`[v0] Answer generated ${eloActive ? "WITH" : "WITHOUT"} ELO documents`)
+    console.log("[Chat] Generated answer:", generatedAnswer)
 
     const finalAnswer = await verifyAndImproveAnswer(question, generatedAnswer)
 
-    console.log("[v0] Final answer after quality control:", finalAnswer)
+    console.log("[Chat] Final answer after quality control:", finalAnswer)
 
-    // Stage 4: Update tokens after successful answer generation
+    // Update tokens after successful answer generation
     if (!profile.is_admin) {
       await supabase
         .from("user_profiles")
@@ -270,13 +248,13 @@ Formuliere sie als Bauki im passenden Ton (freundlich, seriös, hilfreich).`,
       await supabase.from("token_usage").insert({
         user_id: userId,
         tokens_used: 1,
-        action: `${eloActive ? "[ELO] " : ""}Frage: ${question.substring(0, 100)}`,
+        action: `Frage: ${question.substring(0, 100)}`,
       })
     } else {
       await supabase.from("token_usage").insert({
         user_id: userId,
         tokens_used: 0,
-        action: `${eloActive ? "[ELO] " : ""}Admin-Frage: ${question.substring(0, 100)}`,
+        action: `Admin-Frage: ${question.substring(0, 100)}`,
       })
     }
 
@@ -286,7 +264,7 @@ Formuliere sie als Bauki im passenden Ton (freundlich, seriös, hilfreich).`,
       },
     })
   } catch (error) {
-    console.error("[v0] Error in chat API:", error)
+    console.error("[Chat] Error in chat API:", error)
     return NextResponse.json({ error: "Interner Serverfehler" }, { status: 500 })
   }
 }

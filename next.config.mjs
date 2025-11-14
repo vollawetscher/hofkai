@@ -6,6 +6,10 @@ const nextConfig = {
   images: {
     unoptimized: true,
   },
+  // Disable Turbopack to avoid WASM binding issues
+  experimental: {
+    turbo: false,
+  },
 }
 
 export default nextConfig
